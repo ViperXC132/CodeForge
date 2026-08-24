@@ -1,0 +1,19 @@
+[package]
+name = "codeforge"
+version = "0.1.0"
+description = "CodeForge desktop code editor"
+authors = ["ViperXC132"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "codeforge_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = "2.6.3"
+
+[dependencies]
+tauri = { version = "2.11.5" }
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-fs = "2.5.1"
