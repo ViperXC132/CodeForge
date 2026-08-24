@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
-import { readDir, readTextFile, writeTextFile, type DirEntry } from '@tauri-apps/plugin-fs'
+import { readDir, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
 import { monaco } from './monaco'
 
 type TreeNode = {
@@ -23,32 +23,10 @@ const IGNORED_DIRECTORIES = new Set(['node_modules', '.git', 'target', 'dist', '
 function languageForFile(name: string) {
   const extension = name.split('.').pop()?.toLowerCase()
   const map: Record<string, string> = {
-    ts: 'typescript',
-    tsx: 'typescript',
-    js: 'javascript',
-    jsx: 'javascript',
-    json: 'json',
-    css: 'css',
-    scss: 'scss',
-    html: 'html',
-    htm: 'html',
-    md: 'markdown',
-    rs: 'rust',
-    py: 'python',
-    java: 'java',
-    kt: 'kotlin',
-    go: 'go',
-    c: 'c',
-    h: 'c',
-    cpp: 'cpp',
-    hpp: 'cpp',
-    cs: 'csharp',
-    xml: 'xml',
-    yaml: 'yaml',
-    yml: 'yaml',
-    toml: 'ini',
-    sh: 'shell',
-    ps1: 'powershell',
+    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', json: 'json',
+    css: 'css', scss: 'scss', html: 'html', htm: 'html', md: 'markdown', rs: 'rust',
+    py: 'python', java: 'java', kt: 'kotlin', go: 'go', c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp',
+    cs: 'csharp', xml: 'xml', yaml: 'yaml', yml: 'yaml', toml: 'ini', sh: 'shell', ps1: 'powershell',
   }
   return (extension && map[extension]) || 'plaintext'
 }
@@ -176,48 +154,33 @@ export default function App() {
   useEffect(() => {
     if (!editorHost.current) return
     const editor = monaco.editor.create(editorHost.current, {
-      value: '',
-      language: 'plaintext',
-      theme: 'codeforge-dark',
-      automaticLayout: true,
-      fontFamily: 'JetBrains Mono, Cascadia Code, Consolas, monospace',
-      fontSize: 14,
-      lineHeight: 22,
-      minimap: { enabled: true, scale: 1 },
-      padding: { top: 18, bottom: 18 },
-      smoothScrolling: true,
-      cursorSmoothCaretAnimation: 'on',
-      renderWhitespace: 'selection',
-      roundedSelection: false,
-      scrollBeyondLastLine: false,
-      tabSize: 2,
+      value: '', language: 'plaintext', theme: 'codeforge-dark', automaticLayout: true,
+      fontFamily: 'JetBrains Mono, Cascadia Code, Consolas, monospace', fontSize: 14, lineHeight: 22,
+      minimap: { enabled: true, scale: 1 }, padding: { top: 18, bottom: 18 }, smoothScrolling: true,
+      cursorSmoothCaretAnimation: 'on', renderWhitespace: 'selection', roundedSelection: false,
+      scrollBeyondLastLine: false, tabSize: 2,
     })
     editorRef.current = editor
 
     monaco.editor.defineTheme('codeforge-dark', {
-      base: 'vs-dark',
-      inherit: true,
+      base: 'vs-dark', inherit: true,
       rules: [
         { token: 'comment', foreground: '6f7785' },
         { token: 'keyword', foreground: 'c792ea' },
         { token: 'string', foreground: 'a8d18d' },
       ],
       colors: {
-        'editor.background': '#0d0f12',
-        'editor.foreground': '#d8dee9',
-        'editorLineNumber.foreground': '#414854',
-        'editorLineNumber.activeForeground': '#8b93a1',
-        'editor.lineHighlightBackground': '#12151a',
-        'editor.selectionBackground': '#29313d',
-        'editorCursor.foreground': '#d8dee9',
-        'editorIndentGuide.background': '#1b1f26',
+        'editor.background': '#0d0f12', 'editor.foreground': '#d8dee9',
+        'editorLineNumber.foreground': '#414854', 'editorLineNumber.activeForeground': '#8b93a1',
+        'editor.lineHighlightBackground': '#12151a', 'editor.selectionBackground': '#29313d',
+        'editorCursor.foreground': '#d8dee9', 'editorIndentGuide.background': '#1b1f26',
         'editorIndentGuide.activeBackground': '#2a303a',
       },
     })
     monaco.editor.setTheme('codeforge-dark')
 
     const disposable = editor.onDidChangeModelContent(() => {
-      const currentPath = activePath
+      const currentPath = editor.getModel()?.uri.fsPath
       if (!currentPath) return
       const value = editor.getValue()
       setFiles((current) => current.map((file) => file.path === currentPath ? { ...file, value, dirty: value !== file.value } : file))
@@ -232,7 +195,7 @@ export default function App() {
 
   useEffect(() => {
     if (!editorRef.current) return
-    if (modelRef.current) modelRef.current.dispose()
+    modelRef.current?.dispose()
 
     if (!activeFile) {
       modelRef.current = monaco.editor.createModel('', 'plaintext')
