@@ -17,7 +17,6 @@ export default defineConfig({
       'monaco-editor/esm/vs/language/typescript/ts.worker.js': monacoEsm('language/typescript/ts.worker.js'),
     },
   },
-  clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
