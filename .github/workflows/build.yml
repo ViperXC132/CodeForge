@@ -1,0 +1,53 @@
+name: Build CodeForge
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build Windows app
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Typecheck and frontend build
+        run: pnpm build
+
+      - name: Build Tauri Windows bundles
+        run: pnpm tauri build
+
+      - name: Upload Windows bundles
+        uses: actions/upload-artifact@v6
+        with:
+          name: CodeForge-Windows
+          path: src-tauri/target/release/bundle/**
+          if-no-files-found: error
+          retention-days: 14
