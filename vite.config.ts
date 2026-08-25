@@ -5,7 +5,7 @@ import monacoEditorPlugin from '@dvaji/vite-plugin-monaco-editor'
 export default defineConfig({
   plugins: [
     react(),
-    monacoEditorPlugin(),
+    monacoEditorPlugin({}),
   ],
   clearScreen: false,
   server: {
