@@ -2,8 +2,6 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 
 // Generate a small, valid 32-bit Windows ICO without external dependencies.
-// The previous icon.ico in the repository was truncated/corrupt, which caused
-// Tauri's generate_context!() proc macro to panic while parsing it.
 const size = 32
 const rowBytes = size * 4
 const xorBytes = rowBytes * size
@@ -28,7 +26,6 @@ ico.writeUInt32LE(dibBytes, 14)
 ico.writeUInt32LE(22, 18)
 
 const dib = 22
-a = ico
 ico.writeUInt32LE(40, dib)
 ico.writeInt32LE(size, dib + 4)
 ico.writeInt32LE(size * 2, dib + 8)
