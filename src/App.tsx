@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { readDir, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
-import { monaco } from './monaco'
+import { monaco } from './monaco-runtime'
 
 type TreeNode = {
   name: string
@@ -28,188 +28,145 @@ function languageForFile(name: string) {
     py: 'python', java: 'java', kt: 'kotlin', go: 'go', c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp',
     cs: 'csharp', xml: 'xml', yaml: 'yaml', yml: 'yaml', toml: 'ini', sh: 'shell', ps1: 'powershell',
   }
-  return (extension && map[extension]) || 'plaintext'
+  return map[extension ?? ''] ?? 'plaintext'
 }
 
-function iconFor(name: string, kind: TreeNode['kind']) {
+function fileIcon(name: string, kind: TreeNode['kind']) {
   if (kind === 'folder') return '▸'
   const extension = name.split('.').pop()?.toLowerCase()
   if (extension === 'ts' || extension === 'tsx') return 'TS'
   if (extension === 'js' || extension === 'jsx') return 'JS'
-  if (extension === 'rs') return 'RS'
   if (extension === 'json') return '{}'
   if (extension === 'css' || extension === 'scss') return '#'
-  if (extension === 'html') return '<>'
-  if (extension === 'md') return 'M'
+  if (extension === 'html' || extension === 'htm') return '<>'
+  if (extension === 'rs') return 'R'
+  if (extension === 'py') return 'Py'
   return '·'
 }
 
-async function buildTree(rootPath: string): Promise<TreeNode> {
-  const entries = await readDir(rootPath)
-  const children: TreeNode[] = []
+async function readTree(path: string): Promise<TreeNode[]> {
+  const entries = await readDir(path)
+  const nodes: TreeNode[] = []
 
   for (const entry of entries) {
-    if (!entry.name || (entry.isDirectory && IGNORED_DIRECTORIES.has(entry.name))) continue
-    const path = `${rootPath.replace(/[\\/]$/, '')}/${entry.name}`
+    if (!entry.name || entry.name.startsWith('.') && entry.name !== '.env') continue
+    const childPath = `${path}\\${entry.name}`
     if (entry.isDirectory) {
-      children.push({ ...(await buildTree(path)), name: entry.name, path, kind: 'folder' })
+      if (IGNORED_DIRECTORIES.has(entry.name)) continue
+      nodes.push({ name: entry.name, path: childPath, kind: 'folder', children: await readTree(childPath) })
     } else {
-      children.push({ name: entry.name, path, kind: 'file' })
+      nodes.push({ name: entry.name, path: childPath, kind: 'file' })
     }
   }
 
-  children.sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1
-    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-  })
-
-  return { name: rootPath.split(/[\\/]/).filter(Boolean).pop() ?? rootPath, path: rootPath, kind: 'folder', children }
-}
-
-function TreeItem({ node, depth, onOpen }: { node: TreeNode; depth: number; onOpen: (node: TreeNode) => void }) {
-  const [expanded, setExpanded] = useState(depth === 0)
-  const isFolder = node.kind === 'folder'
-
-  return (
-    <div>
-      <button
-        className={`tree-item ${isFolder ? 'folder' : 'file'}`}
-        style={{ paddingLeft: `${12 + depth * 14}px` }}
-        onClick={() => (isFolder ? setExpanded((value) => !value) : onOpen(node))}
-        title={node.path}
-      >
-        <span className={`tree-chevron ${expanded ? 'expanded' : ''}`}>{isFolder ? '▸' : ''}</span>
-        <span className={`file-icon ${isFolder ? 'folder-icon' : ''}`}>{iconFor(node.name, node.kind)}</span>
-        <span className="tree-label">{node.name}</span>
-      </button>
-      {isFolder && expanded && node.children?.map((child) => (
-        <TreeItem key={child.path} node={child} depth={depth + 1} onOpen={onOpen} />
-      ))}
-    </div>
-  )
+  return nodes.sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'folder' ? -1 : 1)
 }
 
 export default function App() {
-  const [projectPath, setProjectPath] = useState<string | null>(null)
-  const [tree, setTree] = useState<TreeNode | null>(null)
-  const [files, setFiles] = useState<OpenFile[]>([])
+  const [root, setRoot] = useState<string | null>(null)
+  const [tree, setTree] = useState<TreeNode[]>([])
+  const [openFiles, setOpenFiles] = useState<OpenFile[]>([])
   const [activePath, setActivePath] = useState<string | null>(null)
-  const [status, setStatus] = useState('Ready')
-  const editorHost = useRef<HTMLDivElement>(null)
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
-  const modelRef = useRef<monaco.editor.ITextModel | null>(null)
+  const [sidebarWidth, setSidebarWidth] = useState(260)
+  const [isResizing, setIsResizing] = useState(false)
+  const editorRef = useRef<HTMLDivElement>(null)
+  const editorInstance = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+  const models = useRef(new Map<string, monaco.editor.ITextModel>())
 
-  const activeFile = useMemo(() => files.find((file) => file.path === activePath) ?? null, [files, activePath])
+  const activeFile = useMemo(() => openFiles.find((file) => file.path === activePath) ?? null, [openFiles, activePath])
 
-  const refreshTree = useCallback(async (root: string) => {
-    try {
-      setTree(await buildTree(root))
-    } catch (error) {
-      setStatus(`Could not read project: ${error instanceof Error ? error.message : String(error)}`)
-    }
+  const refreshTree = useCallback(async (path: string) => {
+    setTree(await readTree(path))
   }, [])
 
-  const openProject = useCallback(async () => {
-    const selected = await open({ directory: true, multiple: false, title: 'Open Project' })
-    if (!selected || Array.isArray(selected)) return
-    setStatus('Opening project…')
-    setProjectPath(selected)
-    setFiles([])
+  const openFolder = useCallback(async () => {
+    const selected = await open({ directory: true, multiple: false })
+    if (!selected || typeof selected !== 'string') return
+    setRoot(selected)
+    setOpenFiles([])
     setActivePath(null)
+    models.current.forEach((model) => model.dispose())
+    models.current.clear()
     await refreshTree(selected)
-    setStatus('Project opened')
   }, [refreshTree])
 
-  const openFile = useCallback(async (node: TreeNode) => {
-    if (node.kind !== 'file') return
-    const existing = files.find((file) => file.path === node.path)
+  const openFile = useCallback(async (file: TreeNode) => {
+    if (file.kind !== 'file') return
+    const existing = openFiles.find((item) => item.path === file.path)
     if (existing) {
-      setActivePath(existing.path)
+      setActivePath(file.path)
       return
     }
-
-    try {
-      const value = await readTextFile(node.path)
-      const file: OpenFile = { path: node.path, name: node.name, language: languageForFile(node.name), value, dirty: false }
-      setFiles((current) => [...current, file])
-      setActivePath(node.path)
-      setStatus(`Opened ${node.name}`)
-    } catch (error) {
-      setStatus(`Could not open ${node.name}: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }, [files])
-
-  const saveActive = useCallback(async () => {
-    if (!activeFile || !editorRef.current) return
-    const value = editorRef.current.getValue()
-    try {
-      await writeTextFile(activeFile.path, value)
-      setFiles((current) => current.map((file) => file.path === activeFile.path ? { ...file, value, dirty: false } : file))
-      setStatus(`Saved ${activeFile.name}`)
-    } catch (error) {
-      setStatus(`Save failed: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }, [activeFile])
-
-  useEffect(() => {
-    if (!editorHost.current) return
-    const editor = monaco.editor.create(editorHost.current, {
-      value: '', language: 'plaintext', theme: 'codeforge-dark', automaticLayout: true,
-      fontFamily: 'JetBrains Mono, Cascadia Code, Consolas, monospace', fontSize: 14, lineHeight: 22,
-      minimap: { enabled: true, scale: 1 }, padding: { top: 18, bottom: 18 }, smoothScrolling: true,
-      cursorSmoothCaretAnimation: 'on', renderWhitespace: 'selection', roundedSelection: false,
-      scrollBeyondLastLine: false, tabSize: 2,
-    })
-    editorRef.current = editor
-
-    monaco.editor.defineTheme('codeforge-dark', {
-      base: 'vs-dark', inherit: true,
-      rules: [
-        { token: 'comment', foreground: '6f7785' },
-        { token: 'keyword', foreground: 'c792ea' },
-        { token: 'string', foreground: 'a8d18d' },
-      ],
-      colors: {
-        'editor.background': '#0d0f12', 'editor.foreground': '#d8dee9',
-        'editorLineNumber.foreground': '#414854', 'editorLineNumber.activeForeground': '#8b93a1',
-        'editor.lineHighlightBackground': '#12151a', 'editor.selectionBackground': '#29313d',
-        'editorCursor.foreground': '#d8dee9', 'editorIndentGuide.background': '#1b1f26',
-        'editorIndentGuide.activeBackground': '#2a303a',
-      },
-    })
-    monaco.editor.setTheme('codeforge-dark')
-
-    const disposable = editor.onDidChangeModelContent(() => {
-      const currentPath = editor.getModel()?.uri.fsPath
-      if (!currentPath) return
-      const value = editor.getValue()
-      setFiles((current) => current.map((file) => file.path === currentPath ? { ...file, value, dirty: value !== file.value } : file))
-    })
-
-    return () => {
-      disposable.dispose()
-      editor.dispose()
-      editorRef.current = null
-    }
-  }, [])
+    const value = await readTextFile(file.path)
+    const model = monaco.editor.createModel(value, languageForFile(file.name), monaco.Uri.file(file.path))
+    models.current.set(file.path, model)
+    setOpenFiles((current) => [...current, { path: file.path, name: file.name, language: languageForFile(file.name), value, dirty: false }])
+    setActivePath(file.path)
+  }, [openFiles])
 
   useEffect(() => {
     if (!editorRef.current) return
-    modelRef.current?.dispose()
-
-    if (!activeFile) {
-      modelRef.current = monaco.editor.createModel('', 'plaintext')
-    } else {
-      modelRef.current = monaco.editor.createModel(activeFile.value, activeFile.language, monaco.Uri.file(activeFile.path))
-    }
-    editorRef.current.setModel(modelRef.current)
-    editorRef.current.focus()
-
+    const editor = monaco.editor.create(editorRef.current, {
+      automaticLayout: true,
+      theme: 'vs-dark',
+      minimap: { enabled: true },
+      smoothScrolling: true,
+      cursorSmoothCaretAnimation: 'on',
+      fontLigatures: true,
+      padding: { top: 14 },
+      renderWhitespace: 'selection',
+      tabSize: 2,
+    })
+    editorInstance.current = editor
     return () => {
-      modelRef.current?.dispose()
-      modelRef.current = null
+      editor.dispose()
+      editorInstance.current = null
     }
-  }, [activeFile?.path])
+  }, [])
+
+  useEffect(() => {
+    const editor = editorInstance.current
+    if (!editor || !activeFile) {
+      if (editor) editor.setModel(null)
+      return
+    }
+    const model = models.current.get(activeFile.path)
+    if (!model) return
+    editor.setModel(model)
+    editor.focus()
+  }, [activeFile])
+
+  useEffect(() => {
+    const editor = editorInstance.current
+    if (!editor) return
+    const disposable = editor.onDidChangeModelContent(() => {
+      const model = editor.getModel()
+      if (!model) return
+      const path = model.uri.fsPath
+      setOpenFiles((current) => current.map((file) => file.path === path ? { ...file, value: model.getValue(), dirty: true } : file))
+    })
+    return () => disposable.dispose()
+  }, [])
+
+  useEffect(() => {
+    if (!isResizing) return
+    const move = (event: MouseEvent) => setSidebarWidth(Math.min(420, Math.max(200, event.clientX)))
+    const up = () => setIsResizing(false)
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+  }, [isResizing])
+
+  const saveActive = useCallback(async () => {
+    if (!activeFile) return
+    const model = models.current.get(activeFile.path)
+    if (!model) return
+    await writeTextFile(activeFile.path, model.getValue())
+    setOpenFiles((current) => current.map((file) => file.path === activeFile.path ? { ...file, value: model.getValue(), dirty: false } : file))
+  }, [activeFile])
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -222,75 +179,66 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [saveActive])
 
+  const closeTab = (path: string) => {
+    const index = openFiles.findIndex((file) => file.path === path)
+    const model = models.current.get(path)
+    model?.dispose()
+    models.current.delete(path)
+    setOpenFiles((current) => current.filter((file) => file.path !== path))
+    if (activePath === path) {
+      const next = openFiles[index + 1] ?? openFiles[index - 1]
+      setActivePath(next?.path ?? null)
+    }
+  }
+
   return (
-    <div className="app-shell">
-      <header className="topbar" data-tauri-drag-region>
-        <div className="brand" data-tauri-drag-region>
-          <div className="brand-mark">⌘</div>
-          <span>CodeForge</span>
-          {projectPath && <span className="project-title">/ {projectPath.split(/[\\/]/).pop()}</span>}
-        </div>
-        <div className="top-actions">
-          <button className="icon-button" title="Command Palette">⌘K</button>
-          <button className="icon-button" title="Settings">⚙</button>
-        </div>
+    <main className="app-shell">
+      <header className="titlebar">
+        <div className="brand"><span className="brand-mark">◆</span> CodeForge</div>
+        <div className="titlebar-project">{root ? root.split('\\').pop() : 'No project open'}</div>
+        <button className="open-button" onClick={() => void openFolder()}>Open Folder</button>
       </header>
-
-      <main className="workspace">
-        <aside className="sidebar">
-          <div className="sidebar-header">
-            <span>EXPLORER</span>
-            <div className="sidebar-actions">
-              <button title="Open project" onClick={() => void openProject()}>＋</button>
-              <button title="Refresh" onClick={() => projectPath && void refreshTree(projectPath)}>↻</button>
-            </div>
-          </div>
-          <div className="explorer">
-            {!tree ? (
-              <div className="explorer-empty">
-                <div className="empty-icon">⌁</div>
-                <strong>No project open</strong>
-                <span>Open a folder to start forging.</span>
-                <button className="primary-button" onClick={() => void openProject()}>Open Folder</button>
-              </div>
-            ) : (
-              <TreeItem node={tree} depth={0} onOpen={(node) => void openFile(node)} />
-            )}
-          </div>
-        </aside>
-
-        <section className="editor-area">
-          <div className="tabbar">
-            {files.length === 0 ? (
-              <div className="tab-empty">Welcome to CodeForge</div>
-            ) : files.map((file) => (
-              <button key={file.path} className={`tab ${file.path === activePath ? 'active' : ''}`} onClick={() => setActivePath(file.path)}>
-                <span className="file-icon">{iconFor(file.name, 'file')}</span>
-                <span>{file.name}</span>
-                {file.dirty && <span className="dirty-dot" />}
-              </button>
+      <section className="workspace">
+        <aside className="explorer" style={{ width: sidebarWidth }}>
+          <div className="explorer-header"><span>EXPLORER</span><span>{root ? 'WORKSPACE' : 'NO PROJECT'}</span></div>
+          <div className="tree">
+            {!root && <button className="empty-action" onClick={() => void openFolder()}>Open a folder to start</button>}
+            {tree.map((node) => (
+              <TreeItem key={node.path} node={node} depth={0} onOpen={openFile} icon={fileIcon} />
             ))}
           </div>
-          <div className="editor-host" ref={editorHost}>
-            {!activeFile && (
-              <div className="welcome-overlay">
-                <div className="forge-glyph">⌘</div>
-                <h1>Forge something.</h1>
-                <p>Open a project and start writing code.</p>
-                <div className="welcome-actions">
-                  <button className="primary-button" onClick={() => void openProject()}>Open Folder</button>
-                  <span>Ctrl + S saves the active file</span>
-                </div>
-              </div>
-            )}
-          </div>
+          <div className="sidebar-resize" onMouseDown={() => setIsResizing(true)} />
+        </aside>
+        <section className="editor-area">
+          <nav className="tabs">
+            {openFiles.map((file) => (
+              <button key={file.path} className={`tab ${activePath === file.path ? 'active' : ''}`} onClick={() => setActivePath(file.path)}>
+                <span>{fileIcon(file.name, 'file')}</span><span>{file.name}</span>{file.dirty && <span className="dirty-dot">●</span>}
+                <span className="tab-close" onClick={(event) => { event.stopPropagation(); closeTab(file.path) }}>×</span>
+              </button>
+            ))}
+          </nav>
+          <div ref={editorRef} className="monaco-host" />
+          <footer className="statusbar">
+            <span>{activeFile?.language ?? 'Plain Text'}</span>
+            <span>{activeFile ? `${activeFile.dirty ? 'Modified' : 'Saved'} · ${activeFile.path}` : 'CodeForge'}</span>
+          </footer>
         </section>
-      </main>
+      </section>
+    </main>
+  )
+}
 
-      <footer className="statusbar">
-        <span>{status}</span>
-        <span>{activeFile ? `${activeFile.language} · ${activeFile.dirty ? 'Modified' : 'Saved'}` : 'No file selected'}</span>
-      </footer>
+function TreeItem({ node, depth, onOpen, icon }: { node: TreeNode; depth: number; onOpen: (node: TreeNode) => void; icon: (name: string, kind: TreeNode['kind']) => string }) {
+  const [expanded, setExpanded] = useState(depth < 1)
+  return (
+    <div>
+      <button className="tree-row" style={{ paddingLeft: 12 + depth * 16 }} onDoubleClick={() => node.kind === 'file' ? onOpen(node) : setExpanded((value) => !value)} onClick={() => node.kind === 'folder' && setExpanded((value) => !value)}>
+        <span className="tree-chevron">{node.kind === 'folder' ? (expanded ? '⌄' : '›') : ''}</span>
+        <span className="tree-icon">{icon(node.name, node.kind)}</span>
+        <span>{node.name}</span>
+      </button>
+      {node.kind === 'folder' && expanded && node.children?.map((child) => <TreeItem key={child.path} node={child} depth={depth + 1} onOpen={onOpen} icon={icon} />)}
     </div>
   )
 }
